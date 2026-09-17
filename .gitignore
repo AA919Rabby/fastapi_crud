@@ -1,9 +1,4 @@
 .env
-alembic.ini
 .myvenv/
 __pycache__/
 *.pyc
-docker-compose.yml
-Dockerfile
-requirements.txt
-alembic
