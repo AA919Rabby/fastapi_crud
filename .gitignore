@@ -1,6 +1,8 @@
 .env
 alembic.ini
-.myvenv
+.myvenv/
+__pycache__/
+*.pyc
 docker-compose.yml
 Dockerfile
 requirements.txt
