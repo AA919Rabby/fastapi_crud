@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     EMAILS_FROM_EMAIL: str = ""
     OTP_EXPIRE_MINUTES: int = 10
 
-
+    RESEND_API_KEY: str = ""
     SSLCOMMERZ_STORE_ID: str = "testbox"
     SSLCOMMERZ_STORE_PASS: str = "qwerty"
     SSLCOMMERZ_IS_SANDBOX: bool = True
