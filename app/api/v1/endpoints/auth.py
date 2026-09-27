@@ -58,7 +58,10 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
 def recover_password(data: RecoverPasswordRequest, db: Session = Depends(get_db)):
     user = get_user_by_email(db, email=data.email)
     if not user:
-        return {"message": "Email not found in our records.", "otp": None}
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Email address not found in our records."
+        )
 
     otp = generate_and_save_otp(db, user)
     send_otp_email(recipient_email=user.email, otp_code=otp)
