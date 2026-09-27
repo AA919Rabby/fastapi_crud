@@ -1,4 +1,6 @@
 from pydantic import BaseModel, EmailStr
+from typing import Optional
+
 
 class UserBase(BaseModel):
     email: EmailStr
@@ -33,6 +35,10 @@ class ChangePassword(BaseModel):
 # Step 1: Request OTP
 class RecoverPasswordRequest(BaseModel):
     email: EmailStr
+
+class RecoverPasswordResponse(BaseModel):
+    message: str
+    otp: Optional[str] = None
 
 # Step 2: Verify OTP
 class RecoveryOTPVerify(BaseModel):

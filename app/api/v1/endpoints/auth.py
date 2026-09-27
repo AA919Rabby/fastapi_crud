@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
-
 from app.core.database import get_db
 from app.core.security import (
     verify_password,
@@ -26,6 +25,7 @@ from app.schemas.user import (
     RecoveryOTPVerify,
     RecoverPasswordTokenResponse,
     RecoverNewPasswordRequest,
+    RecoverPasswordResponse
 )
 
 router = APIRouter()
@@ -52,16 +52,23 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
     access_token = create_access_token(subject=user.id)
     return {"access_token": access_token, "token_type": "bearer"}
 
+
 # 1. Send OTP to Email
-@router.post("/recover_password", response_model=Msg)
+@router.post("/recover_password", response_model=RecoverPasswordResponse)
 def recover_password(data: RecoverPasswordRequest, db: Session = Depends(get_db)):
     user = get_user_by_email(db, email=data.email)
     if not user:
-        return {"message": "If this email is registered, an OTP code has been sent."}
+        return {"message": "Email not found in our records.", "otp": None}
 
     otp = generate_and_save_otp(db, user)
     send_otp_email(recipient_email=user.email, otp_code=otp)
-    return {"message": "OTP has been sent to your email."}
+
+    # Returns the OTP directly in JSON response for easy Postman testing
+    return {
+        "message": "OTP has been sent to your email.",
+        "otp": otp
+    }
+
 
 # 2. Verify OTP only -> Returns recover_password_token
 @router.post("/recovery_otp_verify", response_model=RecoverPasswordTokenResponse)
