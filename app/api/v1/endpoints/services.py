@@ -1,8 +1,10 @@
 import uuid
+import math
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, Form
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import or_, desc, asc
 
 from app.core.database import get_db
 from app.api.deps import get_current_user
@@ -11,6 +13,7 @@ from app.models.service import Service, ServiceReview, ServiceOrder
 from app.schemas.service import (
     ServiceResponse,
     ServiceDetailResponse,
+    PaginatedServiceResponse,
     ReviewCreate,
     ReviewResponse,
     OrderCreate,
@@ -24,20 +27,85 @@ from app.core.gemini_assistant import run_gemini_service_assistant
 
 router = APIRouter()
 
-# ----------------- 1. SERVICES & CATEGORIES -----------------
+# =====================================================================
+# 1. SERVICES WITH FULL SEARCH, FILTERING, SORTING & PAGINATION
+# =====================================================================
 
-@router.get("/", response_model=List[ServiceResponse])
+@router.get("/", response_model=PaginatedServiceResponse)
 def get_all_services(
-    category: Optional[str] = Query(None, description="Categories: 'hair cut', 'makeup beauty', 'ac repair', 'house painting'"),
-    area: Optional[str] = Query(None, description="Location filter (e.g. Gulshan, Banani, Dhanmondi, Mirpur)"),
+    search: Optional[str] = Query(None, description="Free text search on title, description, and location area"),
+    category: Optional[str] = Query(None, description="Filter by category ('hair cut', 'makeup beauty', 'ac repair', 'house painting')"),
+    area: Optional[str] = Query(None, description="Filter by area (e.g., Gulshan, Banani, Dhanmondi, Mirpur)"),
+    min_price: Optional[float] = Query(None, ge=0, description="Minimum price in BDT"),
+    max_price: Optional[float] = Query(None, ge=0, description="Maximum price in BDT"),
+    min_rating: Optional[float] = Query(None, ge=0, le=5, description="Minimum rating filter (0 to 5)"),
+    available_only: Optional[bool] = Query(False, description="Filter only services with stock > 0"),
+    sort_by: Optional[str] = Query("id", description="Sort by: 'price_asc', 'price_desc', 'rating_desc', 'newest'"),
+    page: int = Query(1, ge=1, description="Page number (starts at 1)"),
+    limit: int = Query(10, ge=1, le=100, description="Items per page"),
     db: Session = Depends(get_db)
 ):
     query = db.query(Service)
+
+    # 1. Search filter across multiple fields
+    if search:
+        search_filter = or_(
+            Service.title.ilike(f"%{search}%"),
+            Service.description.ilike(f"%{search}%"),
+            Service.location_area.ilike(f"%{search}%")
+        )
+        query = query.filter(search_filter)
+
+    # 2. Filter by Category
     if category:
         query = query.filter(Service.category.ilike(f"%{category}%"))
+
+    # 3. Filter by Location Area
     if area:
         query = query.filter(Service.location_area.ilike(f"%{area}%"))
-    return query.all()
+
+    # 4. Filter by Price Range
+    if min_price is not None:
+        query = query.filter(Service.price_bdt >= min_price)
+    if max_price is not None:
+        query = query.filter(Service.price_bdt <= max_price)
+
+    # 5. Filter by Minimum Rating
+    if min_rating is not None:
+        query = query.filter(Service.rating >= min_rating)
+
+    # 6. Filter by Stock Availability
+    if available_only:
+        query = query.filter(Service.stock > 0, Service.is_available == True)
+
+    # 7. Sorting
+    if sort_by == "price_asc":
+        query = query.order_by(asc(Service.price_bdt))
+    elif sort_by == "price_desc":
+        query = query.order_by(desc(Service.price_bdt))
+    elif sort_by == "rating_desc":
+        query = query.order_by(desc(Service.rating))
+    elif sort_by == "newest":
+        query = query.order_by(desc(Service.id))
+    else:
+        query = query.order_by(asc(Service.id))
+
+    # 8. Pagination calculation
+    total_items = query.count()
+    total_pages = math.ceil(total_items / limit) if total_items > 0 else 1
+    offset = (page - 1) * limit
+
+    items = query.offset(offset).limit(limit).all()
+
+    return {
+        "total_items": total_items,
+        "total_pages": total_pages,
+        "current_page": page,
+        "limit": limit,
+        "has_next": page < total_pages,
+        "has_previous": page > 1,
+        "items": items
+    }
 
 @router.get("/categories", response_model=List[str])
 def get_categories(db: Session = Depends(get_db)):
@@ -51,7 +119,9 @@ def get_service_details(service_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Service not found.")
     return service
 
-# ----------------- 2. ADD REVIEW (UPDATES 0.0 RATING) -----------------
+# =====================================================================
+# 2. ADD REVIEW (UPDATES 0.0 RATING IN REAL-TIME)
+# =====================================================================
 
 @router.post("/reviews", response_model=ReviewResponse)
 async def add_service_review(
@@ -71,7 +141,7 @@ async def add_service_review(
     )
     db.add(review)
 
-    # Recalculate average rating dynamically from existing reviews
+    # Recalculate average rating dynamically
     all_reviews = db.query(ServiceReview).filter(ServiceReview.service_id == service.id).all()
     total_reviews_count = len(all_reviews) + 1
     total_rating_sum = sum([r.rating for r in all_reviews]) + review_in.rating
@@ -83,7 +153,7 @@ async def add_service_review(
     db.commit()
     db.refresh(review)
 
-    # Broadcast live review update
+    # Broadcast review update to all WebSocket clients
     await ws_manager.broadcast({
         "event": "NEW_REVIEW",
         "service_id": service.id,
@@ -93,7 +163,9 @@ async def add_service_review(
 
     return review
 
-# ----------------- 3. ORDER SERVICES WITH STOCK CHECK & SSLCOMMERZ -----------------
+# =====================================================================
+# 3. SERVICE ORDERS & SSLCOMMERZ CHECKOUT
+# =====================================================================
 
 @router.post("/order", response_model=OrderResponse)
 async def create_service_order(
@@ -108,7 +180,7 @@ async def create_service_order(
     if service.stock <= 0:
         raise HTTPException(status_code=400, detail="This service is out of available slots.")
 
-    # Deduct stock
+    # Decrement available stock
     service.stock -= 1
     if service.stock == 0:
         service.is_available = False
@@ -126,7 +198,7 @@ async def create_service_order(
         payment_status="UNPAID"
     )
 
-    # Request payment session from SSLCommerz sandbox
+    # Request Sandbox Gateway URL from SSLCommerz
     ssl_res = await ssl_client.init_payment(
         tran_id=tran_id,
         total_amount=service.price_bdt,
@@ -144,7 +216,7 @@ async def create_service_order(
     db.commit()
     db.refresh(order)
 
-    # Broadcast order creation and stock decrement
+    # Broadcast new order and updated stock via WebSocket
     await ws_manager.broadcast({
         "event": "NEW_ORDER",
         "order_id": order.id,
@@ -174,7 +246,7 @@ async def cancel_service_order(
 
     order.status = "CANCELLED"
 
-    # Restore stock
+    # Restore stock slot
     service = db.query(Service).filter(Service.id == order.service_id).first()
     if service:
         service.stock += 1
@@ -183,7 +255,7 @@ async def cancel_service_order(
     db.commit()
     db.refresh(order)
 
-    # Broadcast status change and restored stock
+    # Broadcast cancelled order and restored stock
     await ws_manager.broadcast({
         "event": "ORDER_STATUS_CHANGED",
         "order_id": order.id,
@@ -199,9 +271,13 @@ def get_service_history(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    return db.query(ServiceOrder).filter(ServiceOrder.user_id == current_user.id).order_by(ServiceOrder.id.desc()).all()
+    return db.query(ServiceOrder).filter(
+        ServiceOrder.user_id == current_user.id
+    ).order_by(ServiceOrder.id.desc()).all()
 
-# ----------------- 4. SSLCOMMERZ WEBHOOK/IPN CALLBACKS -----------------
+# =====================================================================
+# 4. SSLCOMMERZ WEBHOOK & USER REDIRECTS
+# =====================================================================
 
 @router.post("/payment/success")
 async def payment_success(
@@ -248,7 +324,9 @@ async def payment_cancel(tran_id: str = Form(...), db: Session = Depends(get_db)
         })
     return HTMLResponse(content=f"<h2>Payment Cancelled.</h2>")
 
-# ----------------- 5. GEMINI AI ASSISTANT -----------------
+# =====================================================================
+# 5. GEMINI AI ASSISTANT (CAN ASSIST/BOOK, CANNOT CLICK PAYMENT)
+# =====================================================================
 
 @router.post("/ai-assistant", response_model=AIChatResponse)
 def chat_with_gemini_assistant(data: AIChatRequest, db: Session = Depends(get_db)):
@@ -267,7 +345,9 @@ def chat_with_gemini_assistant(data: AIChatRequest, db: Session = Depends(get_db
     ]
     return run_gemini_service_assistant(data.message, service_dicts)
 
-# ----------------- 6. LIVE WEBSOCKET -----------------
+# =====================================================================
+# 6. LIVE WEBSOCKET CONNECTION
+# =====================================================================
 
 @router.websocket("/ws")
 async def service_websocket_endpoint(websocket: WebSocket):

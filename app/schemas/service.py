@@ -2,6 +2,8 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime
 
+# --- REVIEWS SCHEMAS ---
+
 class ReviewCreate(BaseModel):
     service_id: int
     rating: int = Field(..., ge=1, le=5)
@@ -15,6 +17,8 @@ class ReviewResponse(BaseModel):
     created_at: datetime
     class Config:
         from_attributes = True
+
+# --- SERVICE SCHEMAS ---
 
 class ServiceResponse(BaseModel):
     id: int
@@ -35,6 +39,19 @@ class ServiceResponse(BaseModel):
 class ServiceDetailResponse(ServiceResponse):
     reviews: List[ReviewResponse] = []
 
+# --- PAGINATION SCHEMA ---
+
+class PaginatedServiceResponse(BaseModel):
+    total_items: int
+    total_pages: int
+    current_page: int
+    limit: int
+    has_next: bool
+    has_previous: bool
+    items: List[ServiceResponse]
+
+# --- ORDERS SCHEMAS ---
+
 class OrderCreate(BaseModel):
     service_id: int
     service_address: str
@@ -53,6 +70,8 @@ class OrderResponse(BaseModel):
     created_at: datetime
     class Config:
         from_attributes = True
+
+# --- GEMINI AI ASSISTANT SCHEMAS ---
 
 class AIChatRequest(BaseModel):
     message: str
