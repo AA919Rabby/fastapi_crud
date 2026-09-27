@@ -12,7 +12,13 @@ def get_user_by_email(db: Session, email: str):
 
 def create_user(db: Session, user: UserCreate):
     hashed_password = get_password_hash(user.password)
-    db_user = User(email=user.email, hashed_password=hashed_password, is_active=True)
+    db_user = User(
+        first_name=user.first_name,
+        last_name=user.last_name,
+        email=user.email,
+        hashed_password=hashed_password,
+        is_active=True
+    )
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
@@ -39,14 +45,12 @@ def generate_and_save_otp(db: Session, user: User) -> str:
     return otp
 
 def verify_only_otp(db: Session, user: User, otp: str) -> bool:
-    """Verifies that the OTP matches and hasn't expired. If valid, consumes the OTP."""
     now = datetime.now(timezone.utc)
     if not user.reset_otp or user.reset_otp != otp:
         return False
     if user.reset_otp_expires_at is None or user.reset_otp_expires_at < now:
         return False
 
-    # Consume the OTP so it cannot be reused
     user.reset_otp = None
     user.reset_otp_expires_at = None
     db.add(user)

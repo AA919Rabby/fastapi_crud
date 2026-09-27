@@ -1,9 +1,10 @@
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 
-
 class UserBase(BaseModel):
     email: EmailStr
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
 
 class UserCreate(UserBase):
     password: str
@@ -21,7 +22,12 @@ class UserRegistrationResponse(BaseModel):
 class Msg(BaseModel):
     message: str
 
-# Legacy schemas kept so imports never break
+# Schema allowing Flutter Web/Mobile to send clean JSON for Login
+class LoginJSONRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+# Legacy schemas kept to prevent import errors in older files
 class ResetPassword(BaseModel):
     token: str
     new_password: str
@@ -30,9 +36,7 @@ class ChangePassword(BaseModel):
     current_password: str
     new_password: str
 
-# --- 3-Step Password Recovery Schemas ---
-
-# Step 1: Request OTP
+# Password recovery schemas
 class RecoverPasswordRequest(BaseModel):
     email: EmailStr
 
@@ -40,17 +44,14 @@ class RecoverPasswordResponse(BaseModel):
     message: str
     otp: Optional[str] = None
 
-# Step 2: Verify OTP
 class RecoveryOTPVerify(BaseModel):
     email: EmailStr
     otp: str
 
-# Step 2 Response: Returns the recovery token
 class RecoverPasswordTokenResponse(BaseModel):
     message: str
     recover_password_token: str
 
-# Step 3: Set new password with the token
 class RecoverNewPasswordRequest(BaseModel):
     recover_password_token: str
     new_password: str
