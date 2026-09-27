@@ -15,6 +15,15 @@ class Settings(BaseSettings):
     EMAILS_FROM_EMAIL: str = ""
     OTP_EXPIRE_MINUTES: int = 10
 
+
+    SSLCOMMERZ_STORE_ID: str = "testbox"
+    SSLCOMMERZ_STORE_PASS: str = "qwerty"
+    SSLCOMMERZ_IS_SANDBOX: bool = True
+    BACKEND_BASE_URL: str = "http://127.0.0.1:8000"
+
+    GEMINI_API_KEY: str = ""
+
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 settings = Settings()

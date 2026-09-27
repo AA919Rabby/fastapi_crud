@@ -5,18 +5,24 @@ from sqlalchemy import text, inspect
 
 from app.api.v1.router import api_router
 from app.core.config import settings
-from app.core.database import engine, Base
-import app.models.user  # ensures models are loaded
+from app.core.database import engine, Base, SessionLocal
+import app.models.user
+import app.models.service
+import app.models.extensions  # Auto-load extensions tables
+from app.core.seeder import seed_default_services
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # --- AUTOMATIC DATABASE MIGRATION ON STARTUP ---
+    # 1. Create all tables automatically
     try:
-        # Create tables if they do not exist
         Base.metadata.create_all(bind=engine)
+        print(">>> [DATABASE] All tables verified/created successfully.")
+    except Exception as e:
+        print(f">>> [DATABASE ERROR] Table creation failed: {e}")
 
-        # Automatically check and add missing OTP columns to 'users' table
+    # 2. Check & add OTP columns to users table automatically
+    try:
         with engine.connect() as conn:
             inspector = inspect(engine)
             if "users" in inspector.get_table_names():
@@ -29,14 +35,20 @@ async def lifespan(app: FastAPI):
 
                 if "reset_otp_expires_at" not in columns:
                     print(">>> [AUTO-MIGRATE] Adding 'reset_otp_expires_at' column...")
-                    conn.execute(
-                        text("ALTER TABLE users ADD COLUMN reset_otp_expires_at TIMESTAMPTZ;")
-                    )
+                    conn.execute(text("ALTER TABLE users ADD COLUMN reset_otp_expires_at TIMESTAMPTZ;"))
                     conn.commit()
-
-        print(">>> [DATABASE] Automatic schema verification complete.")
     except Exception as e:
-        print(f">>> [DATABASE ERROR] Could not auto-migrate: {e}")
+        print(f">>> [DATABASE ERROR] Could not verify user columns: {e}")
+
+    # 3. Seed services
+    db = SessionLocal()
+    try:
+        seed_default_services(db)
+    except Exception as e:
+        print(f">>> [SEEDER ERROR] Failed to seed services: {e}")
+        db.rollback()
+    finally:
+        db.close()
 
     yield
 
@@ -62,6 +74,7 @@ app.add_middleware(
 )
 
 app.include_router(api_router, prefix="/api/v1")
+
 
 @app.get("/health", tags=["health"])
 def health_check():

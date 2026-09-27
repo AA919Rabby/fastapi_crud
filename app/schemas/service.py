@@ -1,0 +1,63 @@
+from pydantic import BaseModel, Field
+from typing import List, Optional
+from datetime import datetime
+
+class ReviewCreate(BaseModel):
+    service_id: int
+    rating: int = Field(..., ge=1, le=5)
+    comment: str
+
+class ReviewResponse(BaseModel):
+    id: int
+    user_id: int
+    rating: int
+    comment: str
+    created_at: datetime
+    class Config:
+        from_attributes = True
+
+class ServiceResponse(BaseModel):
+    id: int
+    title: str
+    category: str
+    description: str
+    price_bdt: float
+    stock: int
+    image_url: str
+    location_area: str
+    service_persons: int
+    is_available: bool
+    rating: float
+    total_reviews: int
+    class Config:
+        from_attributes = True
+
+class ServiceDetailResponse(ServiceResponse):
+    reviews: List[ReviewResponse] = []
+
+class OrderCreate(BaseModel):
+    service_id: int
+    service_address: str
+    customer_phone: str
+
+class OrderResponse(BaseModel):
+    id: int
+    tran_id: str
+    service_id: int
+    service_address: str
+    customer_phone: str
+    total_amount: float
+    status: str
+    payment_status: str
+    payment_session_url: Optional[str] = None
+    created_at: datetime
+    class Config:
+        from_attributes = True
+
+class AIChatRequest(BaseModel):
+    message: str
+
+class AIChatResponse(BaseModel):
+    reply: str
+    suggested_action: Optional[str] = None
+    order_details: Optional[dict] = None
