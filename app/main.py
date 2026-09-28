@@ -63,13 +63,13 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Allow all origins, headers, and methods for Flutter Web (Chrome), iOS, and Android
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origin_regex=".*",     # Regex matches any origin including dynamic localhost ports (e.g. localhost:52754)
+    allow_credentials=True,      # Safe with allow_origin_regex
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 app.include_router(api_router, prefix="/api/v1")

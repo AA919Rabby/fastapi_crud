@@ -1,7 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
-from typing import Optional
 
 from app.core.database import get_db
 from app.core.security import (
@@ -23,7 +22,6 @@ from app.schemas.user import (
     UserCreate,
     UserRegistrationResponse,
     Msg,
-    LoginJSONRequest,
     RecoverPasswordRequest,
     RecoverPasswordResponse,
     RecoveryOTPVerify,
@@ -33,7 +31,7 @@ from app.schemas.user import (
 
 router = APIRouter()
 
-# 1. Registration with first_name & last_name
+# 1. Registration
 @router.post("/register", response_model=UserRegistrationResponse, status_code=status.HTTP_201_CREATED)
 def register(user_in: UserCreate, db: Session = Depends(get_db)):
     user = get_user_by_email(db, email=user_in.email)
@@ -45,39 +43,15 @@ def register(user_in: UserCreate, db: Session = Depends(get_db)):
     user = create_user(db, user=user_in)
     return {"message": "User registered successfully", "user": user}
 
-# 2. Universal Login: Handles BOTH JSON (Flutter Chrome/iOS/Android) AND Form Data (Swagger)
+# 2. Login (Restored to original OAuth2PasswordRequestForm)
 @router.post("/login", response_model=Token)
-async def login(
-    request: Request,
-    db: Session = Depends(get_db)
-):
-    email = None
-    password = None
-
-    # Check if request is JSON (Flutter standard) or Form Data (Swagger UI)
-    content_type = request.headers.get("content-type", "")
-    if "application/json" in content_type:
-        body = await request.json()
-        email = body.get("email") or body.get("username")
-        password = body.get("password")
-    else:
-        form = await request.form()
-        email = form.get("username") or form.get("email")
-        password = form.get("password")
-
-    if not email or not password:
+def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    user = get_user_by_email(db, email=form_data.username)
+    if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Both email and password are required."
+            detail="Incorrect email or password"
         )
-
-    user = get_user_by_email(db, email=email)
-    if not user or not verify_password(password, user.hashed_password):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Incorrect email or password."
-        )
-
     access_token = create_access_token(subject=user.id)
     return {"access_token": access_token, "token_type": "bearer"}
 
