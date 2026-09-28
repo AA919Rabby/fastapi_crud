@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -20,7 +20,6 @@ from app.schemas.token import Token
 from app.schemas.user import (
     UserCreate,
     UserRegistrationResponse,
-    UserLoginJSON,
     Msg,
     RecoverPasswordRequest,
     RecoverPasswordResponse,
@@ -31,7 +30,7 @@ from app.schemas.user import (
 
 router = APIRouter()
 
-# 1. REGISTER (Pure JSON)
+# 1. REGISTER
 @router.post("/register", response_model=UserRegistrationResponse, status_code=status.HTTP_201_CREATED)
 def register(user_in: UserCreate, db: Session = Depends(get_db)):
     user = get_user_by_email(db, email=user_in.email)
@@ -43,19 +42,47 @@ def register(user_in: UserCreate, db: Session = Depends(get_db)):
     user = create_user(db, user=user_in)
     return {"message": "User registered successfully", "user": user}
 
-# 2. LOGIN (Pure JSON: accepts email and password with jsonEncode)
+# 2. UNIVERSAL LOGIN (WORKS FOR BOTH FLUTTER JSON & SWAGGER AUTHORIZE POPUP)
 @router.post("/login", response_model=Token)
-def login(login_data: UserLoginJSON, db: Session = Depends(get_db)):
-    user = get_user_by_email(db, email=login_data.email)
-    if not user or not verify_password(login_data.password, user.hashed_password):
+async def login(request: Request, db: Session = Depends(get_db)):
+    content_type = request.headers.get("content-type", "")
+    email = None
+    password = None
+
+    # Handle Flutter JSON
+    if "application/json" in content_type:
+        try:
+            body = await request.json()
+            email = body.get("email") or body.get("username")
+            password = body.get("password")
+        except Exception:
+            pass
+    # Handle Swagger Form Data
+    else:
+        try:
+            form = await request.form()
+            email = form.get("username") or form.get("email")
+            password = form.get("password")
+        except Exception:
+            pass
+
+    if not email or not password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Both email/username and password are required."
+        )
+
+    user = get_user_by_email(db, email=str(email).strip())
+    if not user or not verify_password(password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Incorrect email or password."
         )
+
     access_token = create_access_token(subject=user.id)
     return {"access_token": access_token, "token_type": "bearer"}
 
-# 3. RECOVER PASSWORD (Pure JSON)
+# 3. RECOVER PASSWORD
 @router.post("/recover_password", response_model=RecoverPasswordResponse)
 def recover_password(data: RecoverPasswordRequest, db: Session = Depends(get_db)):
     user = get_user_by_email(db, email=data.email)
@@ -67,13 +94,12 @@ def recover_password(data: RecoverPasswordRequest, db: Session = Depends(get_db)
 
     otp = generate_and_save_otp(db, user)
     send_otp_email(recipient_email=user.email, otp_code=otp)
-
     return {
         "message": "OTP has been sent to your email.",
         "otp": otp
     }
 
-# 4. VERIFY OTP (Pure JSON)
+# 4. VERIFY OTP
 @router.post("/recovery_otp_verify", response_model=RecoverPasswordTokenResponse)
 def recovery_otp_verify(data: RecoveryOTPVerify, db: Session = Depends(get_db)):
     user = get_user_by_email(db, email=data.email)
@@ -96,7 +122,7 @@ def recovery_otp_verify(data: RecoveryOTPVerify, db: Session = Depends(get_db)):
         "recover_password_token": token
     }
 
-# 5. SET NEW PASSWORD (Pure JSON)
+# 5. SET NEW PASSWORD
 @router.post("/recover_new_password", response_model=Msg)
 def recover_new_password(data: RecoverNewPasswordRequest, db: Session = Depends(get_db)):
     email = verify_recover_password_token(data.recover_password_token)
