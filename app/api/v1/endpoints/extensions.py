@@ -140,15 +140,17 @@ async def initiate_payment(
         ServiceOrder.id == data.order_id,
         ServiceOrder.user_id == current_user.id
     ).first()
+
     if not order:
-        raise HTTPException(status_code=404, detail="Order not found.")
+        raise HTTPException(status_code=404, detail="Order not found for current user.")
 
     if order.payment_status == "PAID":
-        raise HTTPException(status_code=400, detail="This order has already been paid.")
+        raise HTTPException(status_code=400, detail="This order is already marked as PAID.")
 
     service = db.query(Service).filter(Service.id == order.service_id).first()
-    service_title = service.title if service else "Service Booking"
+    service_title = service.title if service else "Home Service"
 
+    # Call SSLCommerz with safe fallbacks
     ssl_res = await ssl_client.init_payment(
         tran_id=order.tran_id,
         total_amount=order.total_amount,
@@ -160,7 +162,8 @@ async def initiate_payment(
     )
 
     if ssl_res.get("status") != "SUCCESS" or not ssl_res.get("GatewayPageURL"):
-        raise HTTPException(status_code=400, detail=f"SSLCommerz initiation failed: {ssl_res.get('failedreason')}")
+        error_msg = ssl_res.get("failedreason") or ssl_res.get("message") or "Gateway initiation failed."
+        raise HTTPException(status_code=400, detail=f"SSLCommerz error: {error_msg}")
 
     order.payment_session_url = ssl_res.get("GatewayPageURL")
     db.commit()
