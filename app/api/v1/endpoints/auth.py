@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -21,6 +20,7 @@ from app.schemas.token import Token
 from app.schemas.user import (
     UserCreate,
     UserRegistrationResponse,
+    UserLoginJSON,
     Msg,
     RecoverPasswordRequest,
     RecoverPasswordResponse,
@@ -31,7 +31,7 @@ from app.schemas.user import (
 
 router = APIRouter()
 
-# 1. Registration
+# 1. REGISTER (Pure JSON)
 @router.post("/register", response_model=UserRegistrationResponse, status_code=status.HTTP_201_CREATED)
 def register(user_in: UserCreate, db: Session = Depends(get_db)):
     user = get_user_by_email(db, email=user_in.email)
@@ -43,19 +43,19 @@ def register(user_in: UserCreate, db: Session = Depends(get_db)):
     user = create_user(db, user=user_in)
     return {"message": "User registered successfully", "user": user}
 
-# 2. Login (Restored to original OAuth2PasswordRequestForm)
+# 2. LOGIN (Pure JSON: accepts email and password with jsonEncode)
 @router.post("/login", response_model=Token)
-def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    user = get_user_by_email(db, email=form_data.username)
-    if not user or not verify_password(form_data.password, user.hashed_password):
+def login(login_data: UserLoginJSON, db: Session = Depends(get_db)):
+    user = get_user_by_email(db, email=login_data.email)
+    if not user or not verify_password(login_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Incorrect email or password"
+            detail="Incorrect email or password."
         )
     access_token = create_access_token(subject=user.id)
     return {"access_token": access_token, "token_type": "bearer"}
 
-# 3. Recover Password with OTP
+# 3. RECOVER PASSWORD (Pure JSON)
 @router.post("/recover_password", response_model=RecoverPasswordResponse)
 def recover_password(data: RecoverPasswordRequest, db: Session = Depends(get_db)):
     user = get_user_by_email(db, email=data.email)
@@ -67,12 +67,13 @@ def recover_password(data: RecoverPasswordRequest, db: Session = Depends(get_db)
 
     otp = generate_and_save_otp(db, user)
     send_otp_email(recipient_email=user.email, otp_code=otp)
+
     return {
         "message": "OTP has been sent to your email.",
         "otp": otp
     }
 
-# 4. Verify OTP
+# 4. VERIFY OTP (Pure JSON)
 @router.post("/recovery_otp_verify", response_model=RecoverPasswordTokenResponse)
 def recovery_otp_verify(data: RecoveryOTPVerify, db: Session = Depends(get_db)):
     user = get_user_by_email(db, email=data.email)
@@ -95,7 +96,7 @@ def recovery_otp_verify(data: RecoveryOTPVerify, db: Session = Depends(get_db)):
         "recover_password_token": token
     }
 
-# 5. Set New Password
+# 5. SET NEW PASSWORD (Pure JSON)
 @router.post("/recover_new_password", response_model=Msg)
 def recover_new_password(data: RecoverNewPasswordRequest, db: Session = Depends(get_db)):
     email = verify_recover_password_token(data.recover_password_token)

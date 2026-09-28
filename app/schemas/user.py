@@ -19,6 +19,10 @@ class UserRegistrationResponse(BaseModel):
     message: str
     user: UserResponse
 
+class UserLoginJSON(BaseModel):
+    email: EmailStr
+    password: str
+
 class Msg(BaseModel):
     message: str
 
