@@ -5,10 +5,11 @@ class SSLCommerzService:
     def __init__(self):
         self.store_id = settings.SSLCOMMERZ_STORE_ID
         self.store_pass = settings.SSLCOMMERZ_STORE_PASS
-        # Correct sandbox URL endpoint
+
+        # Correct Gateway URLs (notice sandbox-gw)
         if settings.SSLCOMMERZ_IS_SANDBOX:
-            self.session_api = "https://sandbox.sslcommerz.com/gwprocess/v4/api.php"
-            self.validation_api = "https://sandbox.sslcommerz.com/validator/api/validationserverAPI.php"
+            self.session_api = "https://sandbox-gw.sslcommerz.com/gwprocess/v4/api.php"
+            self.validation_api = "https://sandbox-gw.sslcommerz.com/validator/api/validationserverAPI.php"
         else:
             self.session_api = "https://securepay.sslcommerz.com/gwprocess/v4/api.php"
             self.validation_api = "https://securepay.sslcommerz.com/validator/api/validationserverAPI.php"
@@ -25,6 +26,7 @@ class SSLCommerzService:
     ) -> dict:
         base_url = settings.BACKEND_BASE_URL.rstrip('/')
 
+        # Standard V4 parameters required by SSLCommerz
         payload = {
             "store_id": self.store_id,
             "store_passwd": self.store_pass,
@@ -35,30 +37,39 @@ class SSLCommerzService:
             "fail_url": f"{base_url}/api/v1/services/payment/fail",
             "cancel_url": f"{base_url}/api/v1/services/payment/cancel",
             "ipn_url": f"{base_url}/api/v1/payment/ipn",
-            "cus_name": cus_name if cus_name else "Valued Customer",
+            # Customer Details
+            "cus_name": cus_name if cus_name else "Test Customer",
             "cus_email": cus_email if cus_email else "customer@example.com",
-            "cus_add1": cus_address if cus_address else "Dhaka, Bangladesh",
+            "cus_add1": cus_address if cus_address else "Dhaka",
             "cus_city": "Dhaka",
+            "cus_postcode": "1200",
             "cus_country": "Bangladesh",
             "cus_phone": cus_phone if cus_phone else "01700000000",
+            # Product Details
+            "product_name": service_title if service_title else "Home Service",
+            "product_category": "Service",
+            "product_profile": "general",
             "shipping_method": "NO",
-            "product_name": service_title if service_title else "Service Booking",
-            "product_category": "HomeService",
-            "product_profile": "general"
+            "num_of_item": "1",
+            # Gateway Options
+            "emi_option": "0"
         }
 
         try:
+            # SSLCommerz requires standard application/x-www-form-urlencoded POST
             async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
                 resp = await client.post(self.session_api, data=payload)
 
-                # Check if response returned valid text
-                if not resp.text or resp.status_code != 200:
-                    return {"status": "FAILED", "failedreason": f"HTTP {resp.status_code}: {resp.text}"}
+                # Check response
+                try:
+                    data = resp.json()
+                    return data
+                except Exception:
+                    # If not JSON, return text for debugging
+                    return {"status": "FAILED", "failedreason": f"Gateway error ({resp.status_code}): {resp.text}"}
 
-                data = resp.json()
-                return data
         except Exception as e:
-            print(f">>> [SSLCOMMERZ ERROR]: {e}")
+            print(f">>> [SSLCOMMERZ EXCEPTION]: {e}")
             return {"status": "FAILED", "failedreason": str(e)}
 
     async def validate_transaction(self, val_id: str) -> dict:
