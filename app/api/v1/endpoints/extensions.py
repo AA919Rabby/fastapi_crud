@@ -18,7 +18,6 @@ from app.core.sslcommerz import ssl_client
 from app.core.ws_manager import ws_manager
 from app.core.notification_service import trigger_notification
 
-# Dedicated Routers for each section
 profile_router = APIRouter()
 notifications_router = APIRouter()
 payment_router = APIRouter()
@@ -35,7 +34,11 @@ def get_user_profile(
 ):
     profile = db.query(UserProfile).filter(UserProfile.user_id == current_user.id).first()
     if not profile:
-        profile = UserProfile(user_id=current_user.id)
+        profile = UserProfile(
+            user_id=current_user.id,
+            full_name=f"{current_user.first_name or ''} {current_user.last_name or ''}".strip(),
+            address=""
+        )
         db.add(profile)
         db.commit()
         db.refresh(profile)
@@ -53,18 +56,19 @@ async def update_user_profile(
         db.add(profile)
 
     if data.full_name is not None:
-        profile.full_name = data.full_name
+        profile.full_name = data.full_name.strip()
     if data.phone_number is not None:
-        profile.phone_number = data.phone_number
+        profile.phone_number = data.phone_number.strip()
     if data.profile_picture_url is not None:
-        profile.profile_picture_url = data.profile_picture_url
+        profile.profile_picture_url = data.profile_picture_url.strip()
     if data.address is not None:
-        profile.address = data.address
+        profile.address = data.address.strip()
 
     profile.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(profile)
 
+    # Trigger Notification for Profile Update
     await trigger_notification(
         db=db,
         user_id=current_user.id,
@@ -72,6 +76,14 @@ async def update_user_profile(
         body="Your personal profile details were updated successfully.",
         notification_type="PROFILE"
     )
+
+    # Broadcast Live WebSocket Event
+    await ws_manager.broadcast({
+        "event": "PROFILE_UPDATED",
+        "user_id": current_user.id,
+        "full_name": profile.full_name,
+        "profile_picture_url": profile.profile_picture_url
+    })
 
     return profile
 
@@ -142,15 +154,14 @@ async def initiate_payment(
     ).first()
 
     if not order:
-        raise HTTPException(status_code=404, detail="Order not found for current user.")
+        raise HTTPException(status_code=404, detail="Order not found.")
 
     if order.payment_status == "PAID":
-        raise HTTPException(status_code=400, detail="This order is already marked as PAID.")
+        raise HTTPException(status_code=400, detail="This order has already been paid.")
 
     service = db.query(Service).filter(Service.id == order.service_id).first()
-    service_title = service.title if service else "Home Service"
+    service_title = service.title if service else "Service Booking"
 
-    # Call SSLCommerz with safe fallbacks
     ssl_res = await ssl_client.init_payment(
         tran_id=order.tran_id,
         total_amount=order.total_amount,

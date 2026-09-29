@@ -2,7 +2,10 @@ from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, date
 
-# Profile
+# ==========================================
+# 1. PROFILE SCHEMAS
+# ==========================================
+
 class ProfileUpdate(BaseModel):
     full_name: Optional[str] = None
     phone_number: Optional[str] = None
@@ -12,15 +15,19 @@ class ProfileUpdate(BaseModel):
 class ProfileResponse(BaseModel):
     id: int
     user_id: int
-    full_name: Optional[str]
-    phone_number: Optional[str]
-    profile_picture_url: Optional[str]
-    address: Optional[str]
-    updated_at: Optional[datetime]
+    full_name: Optional[str] = None
+    phone_number: Optional[str] = None
+    profile_picture_url: Optional[str] = None
+    address: Optional[str] = None
+    updated_at: Optional[datetime] = None
+
     class Config:
         from_attributes = True
 
-# FCM & Notifications
+# ==========================================
+# 2. NOTIFICATIONS & FCM SCHEMAS
+# ==========================================
+
 class FCMTokenCreate(BaseModel):
     fcm_token: str
     device_type: Optional[str] = "android"
@@ -32,10 +39,14 @@ class NotificationResponse(BaseModel):
     notification_type: str
     is_read: bool
     created_at: datetime
+
     class Config:
         from_attributes = True
 
-# Slots
+# ==========================================
+# 3. SLOTS SCHEMAS
+# ==========================================
+
 class SlotResponse(BaseModel):
     id: int
     service_id: int
@@ -43,10 +54,14 @@ class SlotResponse(BaseModel):
     start_time: str
     end_time: str
     is_booked: bool
+
     class Config:
         from_attributes = True
 
-# Payment Initiate
+# ==========================================
+# 4. PAYMENT INITIATE SCHEMAS
+# ==========================================
+
 class PaymentInitiateRequest(BaseModel):
     order_id: int
 
