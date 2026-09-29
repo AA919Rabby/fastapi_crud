@@ -353,7 +353,16 @@ def get_service_history(
     if exclude_cancelled:
         query = query.filter(ServiceOrder.status != "CANCELLED")
 
-    return query.order_by(ServiceOrder.id.desc()).all()
+    orders = query.order_by(ServiceOrder.id.desc()).all()
+
+    # Attach formatted date string (e.g., "2026-09-29")
+    for order in orders:
+        if order.created_at:
+            order.date = order.created_at.strftime("%Y-%m-%d")
+        else:
+            order.date = "N/A"
+
+    return orders
 
 # =====================================================================
 # 4. SSLCOMMERZ WEBHOOK & USER REDIRECTS

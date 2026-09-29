@@ -71,6 +71,8 @@ class OrderResponse(BaseModel):
     payment_status: str
     payment_session_url: Optional[str] = None
     created_at: datetime
+    date: Optional[str] = None  # Added for Flutter compatibility
+
     class Config:
         from_attributes = True
 
