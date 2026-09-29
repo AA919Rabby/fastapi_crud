@@ -425,6 +425,41 @@ def chat_with_gemini_assistant(data: AIChatRequest, db: Session = Depends(get_db
     ]
     return run_gemini_service_assistant(data.message, service_dicts)
 
+
+# ----------------- MARK ORDER AS COMPLETED -----------------
+
+@router.post("/order/{order_id}/complete", response_model=OrderResponse)
+async def complete_service_order(
+    order_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    order = db.query(ServiceOrder).filter(
+        ServiceOrder.id == order_id,
+        ServiceOrder.user_id == current_user.id
+    ).first()
+
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found.")
+
+    if order.status == "CANCELLED":
+        raise HTTPException(status_code=400, detail="Cannot complete a cancelled order.")
+
+    # 1. Update status to COMPLETED
+    order.status = "COMPLETED"
+    db.commit()
+    db.refresh(order)
+
+    # 2. Broadcast live status change to WebSocket
+    await ws_manager.broadcast({
+        "event": "ORDER_STATUS_CHANGED",
+        "order_id": order.id,
+        "status": "COMPLETED"
+    })
+
+    return order
+
+
 # =====================================================================
 # 6. LIVE WEBSOCKET
 # =====================================================================
