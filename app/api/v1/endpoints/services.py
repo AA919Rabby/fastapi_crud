@@ -10,6 +10,7 @@ from app.core.database import get_db
 from app.api.deps import get_current_user
 from app.models.user import User
 from app.models.service import Service, ServiceReview, ServiceOrder
+from app.models.extensions import UserProfile
 from app.schemas.service import (
     ServiceResponse,
     ServiceDetailResponse,
@@ -26,6 +27,31 @@ from app.core.ws_manager import ws_manager
 from app.core.gemini_assistant import run_gemini_service_assistant
 
 router = APIRouter()
+
+# Helper to enrich review with user's full name & profile picture
+def format_review_with_user(db: Session, review: ServiceReview) -> dict:
+    user = db.query(User).filter(User.id == review.user_id).first()
+    profile = db.query(UserProfile).filter(UserProfile.user_id == review.user_id).first() if user else None
+
+    # Determine reviewer name
+    user_name = "Anonymous User"
+    if profile and profile.full_name:
+        user_name = profile.full_name
+    elif user and (user.first_name or user.last_name):
+        user_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
+    elif user and user.email:
+        user_name = user.email.split("@")[0]
+
+    return {
+        "id": review.id,
+        "service_id": review.service_id,
+        "user_id": review.user_id,
+        "user_name": user_name,
+        "user_profile_picture": profile.profile_picture_url if profile else None,
+        "rating": review.rating,
+        "comment": review.comment,
+        "created_at": review.created_at
+    }
 
 # =====================================================================
 # 1. SERVICES WITH FULL SEARCH, FILTERING, SORTING & PAGINATION
@@ -47,7 +73,6 @@ def get_all_services(
 ):
     query = db.query(Service)
 
-    # 1. Search filter across multiple fields
     if search:
         search_filter = or_(
             Service.title.ilike(f"%{search}%"),
@@ -56,29 +81,23 @@ def get_all_services(
         )
         query = query.filter(search_filter)
 
-    # 2. Filter by Category
     if category:
         query = query.filter(Service.category.ilike(f"%{category}%"))
 
-    # 3. Filter by Location Area
     if area:
         query = query.filter(Service.location_area.ilike(f"%{area}%"))
 
-    # 4. Filter by Price Range
     if min_price is not None:
         query = query.filter(Service.price_bdt >= min_price)
     if max_price is not None:
         query = query.filter(Service.price_bdt <= max_price)
 
-    # 5. Filter by Minimum Rating
     if min_rating is not None:
         query = query.filter(Service.rating >= min_rating)
 
-    # 6. Filter by Stock Availability
     if available_only:
         query = query.filter(Service.stock > 0, Service.is_available == True)
 
-    # 7. Sorting
     if sort_by == "price_asc":
         query = query.order_by(asc(Service.price_bdt))
     elif sort_by == "price_desc":
@@ -90,7 +109,6 @@ def get_all_services(
     else:
         query = query.order_by(asc(Service.id))
 
-    # 8. Pagination calculation
     total_items = query.count()
     total_pages = math.ceil(total_items / limit) if total_items > 0 else 1
     offset = (page - 1) * limit
@@ -117,10 +135,30 @@ def get_service_details(service_id: int, db: Session = Depends(get_db)):
     service = db.query(Service).filter(Service.id == service_id).first()
     if not service:
         raise HTTPException(status_code=404, detail="Service not found.")
-    return service
+
+    # Fetch reviews with user details
+    reviews = db.query(ServiceReview).filter(ServiceReview.service_id == service.id).order_by(desc(ServiceReview.id)).all()
+    formatted_reviews = [format_review_with_user(db, r) for r in reviews]
+
+    service_dict = {
+        "id": service.id,
+        "title": service.title,
+        "category": service.category,
+        "description": service.description,
+        "price_bdt": service.price_bdt,
+        "stock": service.stock,
+        "image_url": service.image_url,
+        "location_area": service.location_area,
+        "service_persons": service.service_persons,
+        "is_available": service.is_available,
+        "rating": service.rating,
+        "total_reviews": service.total_reviews,
+        "reviews": formatted_reviews
+    }
+    return service_dict
 
 # =====================================================================
-# 2. ADD REVIEW (UPDATES 0.0 RATING IN REAL-TIME)
+# 2. REVIEWS: ADD & GET REVIEWS FOR A SERVICE
 # =====================================================================
 
 @router.post("/reviews", response_model=ReviewResponse)
@@ -141,7 +179,7 @@ async def add_service_review(
     )
     db.add(review)
 
-    # Recalculate average rating dynamically
+    # Recalculate average rating
     all_reviews = db.query(ServiceReview).filter(ServiceReview.service_id == service.id).all()
     total_reviews_count = len(all_reviews) + 1
     total_rating_sum = sum([r.rating for r in all_reviews]) + review_in.rating
@@ -153,7 +191,7 @@ async def add_service_review(
     db.commit()
     db.refresh(review)
 
-    # Broadcast review update to all WebSocket clients
+    # Broadcast review event
     await ws_manager.broadcast({
         "event": "NEW_REVIEW",
         "service_id": service.id,
@@ -161,7 +199,19 @@ async def add_service_review(
         "total_reviews": service.total_reviews
     })
 
-    return review
+    return format_review_with_user(db, review)
+
+@router.get("/{service_id}/reviews", response_model=List[ReviewResponse])
+def get_service_reviews(
+    service_id: int,
+    db: Session = Depends(get_db)
+):
+    service = db.query(Service).filter(Service.id == service_id).first()
+    if not service:
+        raise HTTPException(status_code=404, detail="Service not found.")
+
+    reviews = db.query(ServiceReview).filter(ServiceReview.service_id == service_id).order_by(desc(ServiceReview.id)).all()
+    return [format_review_with_user(db, r) for r in reviews]
 
 # =====================================================================
 # 3. SERVICE ORDERS & SSLCOMMERZ CHECKOUT
@@ -180,7 +230,6 @@ async def create_service_order(
     if service.stock <= 0:
         raise HTTPException(status_code=400, detail="This service is out of available slots.")
 
-    # Decrement available stock
     service.stock -= 1
     if service.stock == 0:
         service.is_available = False
@@ -198,7 +247,6 @@ async def create_service_order(
         payment_status="UNPAID"
     )
 
-    # Request Sandbox Gateway URL from SSLCommerz
     ssl_res = await ssl_client.init_payment(
         tran_id=tran_id,
         total_amount=service.price_bdt,
@@ -216,7 +264,6 @@ async def create_service_order(
     db.commit()
     db.refresh(order)
 
-    # Broadcast new order and updated stock via WebSocket
     await ws_manager.broadcast({
         "event": "NEW_ORDER",
         "order_id": order.id,
@@ -242,11 +289,12 @@ async def cancel_service_order(
         raise HTTPException(status_code=404, detail="Order not found.")
 
     if order.status in ["COMPLETED", "CANCELLED"]:
-        raise HTTPException(status_code=400, detail=f"Cannot cancel order in '{order.status}' status.")
+        raise HTTPException(status_code=400, detail=f"Cannot cancel order that is already '{order.status}'.")
 
     order.status = "CANCELLED"
+    if order.payment_status != "PAID":
+        order.payment_status = "CANCELLED"
 
-    # Restore stock slot
     service = db.query(Service).filter(Service.id == order.service_id).first()
     if service:
         service.stock += 1
@@ -255,7 +303,6 @@ async def cancel_service_order(
     db.commit()
     db.refresh(order)
 
-    # Broadcast cancelled order and restored stock
     await ws_manager.broadcast({
         "event": "ORDER_STATUS_CHANGED",
         "order_id": order.id,
@@ -266,14 +313,47 @@ async def cancel_service_order(
 
     return order
 
-@router.get("/order/history", response_model=List[OrderResponse])
-def get_service_history(
+@router.delete("/order/{order_id}", response_model=dict)
+def delete_service_order(
+    order_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    return db.query(ServiceOrder).filter(
+    order = db.query(ServiceOrder).filter(
+        ServiceOrder.id == order_id,
         ServiceOrder.user_id == current_user.id
-    ).order_by(ServiceOrder.id.desc()).all()
+    ).first()
+
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found.")
+
+    if order.status == "PENDING":
+        service = db.query(Service).filter(Service.id == order.service_id).first()
+        if service:
+            service.stock += 1
+            service.is_available = True
+
+    db.delete(order)
+    db.commit()
+
+    return {"message": "Order removed successfully."}
+
+@router.get("/order/history", response_model=List[OrderResponse])
+def get_service_history(
+    status: Optional[str] = Query(None, description="Filter history by status"),
+    exclude_cancelled: bool = Query(False, description="Set to true to hide cancelled orders"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    query = db.query(ServiceOrder).filter(ServiceOrder.user_id == current_user.id)
+
+    if status:
+        query = query.filter(ServiceOrder.status == status.upper())
+
+    if exclude_cancelled:
+        query = query.filter(ServiceOrder.status != "CANCELLED")
+
+    return query.order_by(ServiceOrder.id.desc()).all()
 
 # =====================================================================
 # 4. SSLCOMMERZ WEBHOOK & USER REDIRECTS
@@ -325,7 +405,7 @@ async def payment_cancel(tran_id: str = Form(...), db: Session = Depends(get_db)
     return HTMLResponse(content=f"<h2>Payment Cancelled.</h2>")
 
 # =====================================================================
-# 5. GEMINI AI ASSISTANT (CAN ASSIST/BOOK, CANNOT CLICK PAYMENT)
+# 5. GEMINI AI ASSISTANT
 # =====================================================================
 
 @router.post("/ai-assistant", response_model=AIChatResponse)
@@ -346,7 +426,7 @@ def chat_with_gemini_assistant(data: AIChatRequest, db: Session = Depends(get_db
     return run_gemini_service_assistant(data.message, service_dicts)
 
 # =====================================================================
-# 6. LIVE WEBSOCKET CONNECTION
+# 6. LIVE WEBSOCKET
 # =====================================================================
 
 @router.websocket("/ws")

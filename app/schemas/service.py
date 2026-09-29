@@ -11,7 +11,10 @@ class ReviewCreate(BaseModel):
 
 class ReviewResponse(BaseModel):
     id: int
+    service_id: int
     user_id: int
+    user_name: str
+    user_profile_picture: Optional[str] = None
     rating: int
     comment: str
     created_at: datetime
