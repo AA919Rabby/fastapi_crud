@@ -21,7 +21,7 @@ async def trigger_notification(
     db.commit()
     db.refresh(notif)
 
-    # 2. Get registered device tokens for Firebase FCM (simulated push)
+    # 2. Check for registered device tokens (FCM)
     tokens = db.query(DeviceToken).filter(DeviceToken.user_id == user_id).all()
     if tokens:
         print(f">>> [FCM PUSH] Sending to {len(tokens)} devices: {title} | {body}")

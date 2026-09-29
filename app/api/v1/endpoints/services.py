@@ -1,7 +1,7 @@
 import uuid
 import math
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, Form
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, Form, status
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, desc, asc
@@ -25,16 +25,15 @@ from app.schemas.service import (
 from app.core.sslcommerz import ssl_client
 from app.core.ws_manager import ws_manager
 from app.core.gemini_assistant import run_gemini_service_assistant
+from app.core.notification_service import trigger_notification
 
 router = APIRouter()
 
-# Helper to enrich review with user's full name & profile picture
 def format_review_with_user(db: Session, review: ServiceReview) -> dict:
     user = db.query(User).filter(User.id == review.user_id).first()
     profile = db.query(UserProfile).filter(UserProfile.user_id == review.user_id).first() if user else None
 
-    # Determine reviewer name
-    user_name = "Anonymous User"
+    user_name = "Anonymous Customer"
     if profile and profile.full_name:
         user_name = profile.full_name
     elif user and (user.first_name or user.last_name):
@@ -54,21 +53,21 @@ def format_review_with_user(db: Session, review: ServiceReview) -> dict:
     }
 
 # =====================================================================
-# 1. SERVICES WITH FULL SEARCH, FILTERING, SORTING & PAGINATION
+# 1. SERVICES CATALOG & CATEGORIES
 # =====================================================================
 
 @router.get("/", response_model=PaginatedServiceResponse)
 def get_all_services(
-    search: Optional[str] = Query(None, description="Free text search on title, description, and location area"),
-    category: Optional[str] = Query(None, description="Filter by category ('hair cut', 'makeup beauty', 'ac repair', 'house painting')"),
-    area: Optional[str] = Query(None, description="Filter by area (e.g., Gulshan, Banani, Dhanmondi, Mirpur)"),
-    min_price: Optional[float] = Query(None, ge=0, description="Minimum price in BDT"),
-    max_price: Optional[float] = Query(None, ge=0, description="Maximum price in BDT"),
-    min_rating: Optional[float] = Query(None, ge=0, le=5, description="Minimum rating filter (0 to 5)"),
-    available_only: Optional[bool] = Query(False, description="Filter only services with stock > 0"),
-    sort_by: Optional[str] = Query("id", description="Sort by: 'price_asc', 'price_desc', 'rating_desc', 'newest'"),
-    page: int = Query(1, ge=1, description="Page number (starts at 1)"),
-    limit: int = Query(10, ge=1, le=100, description="Items per page"),
+    search: Optional[str] = Query(None, description="Search by title, description, or area"),
+    category: Optional[str] = Query(None, description="Category filter"),
+    area: Optional[str] = Query(None, description="Area filter"),
+    min_price: Optional[float] = Query(None, ge=0),
+    max_price: Optional[float] = Query(None, ge=0),
+    min_rating: Optional[float] = Query(None, ge=0, le=5),
+    available_only: Optional[bool] = Query(False),
+    sort_by: Optional[str] = Query("id"),
+    page: int = Query(1, ge=1),
+    limit: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db)
 ):
     query = db.query(Service)
@@ -112,7 +111,6 @@ def get_all_services(
     total_items = query.count()
     total_pages = math.ceil(total_items / limit) if total_items > 0 else 1
     offset = (page - 1) * limit
-
     items = query.offset(offset).limit(limit).all()
 
     return {
@@ -136,11 +134,10 @@ def get_service_details(service_id: int, db: Session = Depends(get_db)):
     if not service:
         raise HTTPException(status_code=404, detail="Service not found.")
 
-    # Fetch reviews with user details
     reviews = db.query(ServiceReview).filter(ServiceReview.service_id == service.id).order_by(desc(ServiceReview.id)).all()
     formatted_reviews = [format_review_with_user(db, r) for r in reviews]
 
-    service_dict = {
+    return {
         "id": service.id,
         "title": service.title,
         "category": service.category,
@@ -155,13 +152,12 @@ def get_service_details(service_id: int, db: Session = Depends(get_db)):
         "total_reviews": service.total_reviews,
         "reviews": formatted_reviews
     }
-    return service_dict
 
 # =====================================================================
-# 2. REVIEWS: ADD & GET REVIEWS FOR A SERVICE
+# 2. REVIEWS APIS (WITH NOTIFICATION TRIGGER)
 # =====================================================================
 
-@router.post("/reviews", response_model=ReviewResponse)
+@router.post("/reviews", response_model=ReviewResponse, status_code=status.HTTP_201_CREATED)
 async def add_service_review(
     review_in: ReviewCreate,
     db: Session = Depends(get_db),
@@ -175,23 +171,31 @@ async def add_service_review(
         service_id=review_in.service_id,
         user_id=current_user.id,
         rating=review_in.rating,
-        comment=review_in.comment
+        comment=review_in.comment.strip()
     )
     db.add(review)
 
-    # Recalculate average rating
     all_reviews = db.query(ServiceReview).filter(ServiceReview.service_id == service.id).all()
-    total_reviews_count = len(all_reviews) + 1
-    total_rating_sum = sum([r.rating for r in all_reviews]) + review_in.rating
-    new_avg_rating = round(total_rating_sum / total_reviews_count, 1)
+    total_count = len(all_reviews) + 1
+    total_sum = sum([r.rating for r in all_reviews]) + review_in.rating
+    new_avg = round(total_sum / total_count, 1)
 
-    service.rating = new_avg_rating
-    service.total_reviews = total_reviews_count
+    service.rating = new_avg
+    service.total_reviews = total_count
 
     db.commit()
     db.refresh(review)
 
-    # Broadcast review event
+    # 1. Trigger in-app notification
+    await trigger_notification(
+        db=db,
+        user_id=current_user.id,
+        title="Review Submitted",
+        body=f"Thank you for rating '{service.title}' {review_in.rating} stars!",
+        notification_type="REVIEW"
+    )
+
+    # 2. Broadcast live WebSocket event
     await ws_manager.broadcast({
         "event": "NEW_REVIEW",
         "service_id": service.id,
@@ -202,19 +206,19 @@ async def add_service_review(
     return format_review_with_user(db, review)
 
 @router.get("/{service_id}/reviews", response_model=List[ReviewResponse])
-def get_service_reviews(
-    service_id: int,
-    db: Session = Depends(get_db)
-):
+def get_service_reviews(service_id: int, db: Session = Depends(get_db)):
     service = db.query(Service).filter(Service.id == service_id).first()
     if not service:
         raise HTTPException(status_code=404, detail="Service not found.")
 
-    reviews = db.query(ServiceReview).filter(ServiceReview.service_id == service_id).order_by(desc(ServiceReview.id)).all()
+    reviews = db.query(ServiceReview).filter(
+        ServiceReview.service_id == service_id
+    ).order_by(desc(ServiceReview.id)).all()
+
     return [format_review_with_user(db, r) for r in reviews]
 
 # =====================================================================
-# 3. SERVICE ORDERS & SSLCOMMERZ CHECKOUT
+# 3. ORDERS (WITH NOTIFICATIONS ON ORDER, COMPLETE, CANCEL)
 # =====================================================================
 
 @router.post("/order", response_model=OrderResponse)
@@ -264,12 +268,64 @@ async def create_service_order(
     db.commit()
     db.refresh(order)
 
+    order.date = order.created_at.strftime("%Y-%m-%d") if order.created_at else "N/A"
+
+    # 1. Trigger Notification: Order Placed
+    await trigger_notification(
+        db=db,
+        user_id=current_user.id,
+        title="Order Placed Successfully",
+        body=f"Your booking for '{service.title}' has been placed (৳{service.price_bdt}). Transaction: {tran_id}",
+        notification_type="ORDER"
+    )
+
+    # 2. Broadcast Live WebSocket
     await ws_manager.broadcast({
         "event": "NEW_ORDER",
         "order_id": order.id,
         "service_id": service.id,
         "new_stock": service.stock,
         "status": order.status
+    })
+
+    return order
+
+@router.post("/order/{order_id}/complete", response_model=OrderResponse)
+async def complete_service_order(
+    order_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    order = db.query(ServiceOrder).filter(
+        ServiceOrder.id == order_id,
+        ServiceOrder.user_id == current_user.id
+    ).first()
+
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found.")
+
+    if order.status == "CANCELLED":
+        raise HTTPException(status_code=400, detail="Cannot complete a cancelled order.")
+
+    order.status = "COMPLETED"
+    db.commit()
+    db.refresh(order)
+
+    order.date = order.created_at.strftime("%Y-%m-%d") if order.created_at else "N/A"
+
+    # Trigger Notification: Order Completed
+    await trigger_notification(
+        db=db,
+        user_id=current_user.id,
+        title="Order Completed!",
+        body=f"Your order #{order.id} is marked as completed. Please take a moment to leave a review.",
+        notification_type="ORDER"
+    )
+
+    await ws_manager.broadcast({
+        "event": "ORDER_STATUS_CHANGED",
+        "order_id": order.id,
+        "status": "COMPLETED"
     })
 
     return order
@@ -302,6 +358,17 @@ async def cancel_service_order(
 
     db.commit()
     db.refresh(order)
+
+    order.date = order.created_at.strftime("%Y-%m-%d") if order.created_at else "N/A"
+
+    # Trigger Notification: Order Cancelled
+    await trigger_notification(
+        db=db,
+        user_id=current_user.id,
+        title="Order Cancelled",
+        body=f"Your order #{order.id} has been cancelled successfully.",
+        notification_type="ORDER"
+    )
 
     await ws_manager.broadcast({
         "event": "ORDER_STATUS_CHANGED",
@@ -340,8 +407,8 @@ def delete_service_order(
 
 @router.get("/order/history", response_model=List[OrderResponse])
 def get_service_history(
-    status: Optional[str] = Query(None, description="Filter history by status"),
-    exclude_cancelled: bool = Query(False, description="Set to true to hide cancelled orders"),
+    status: Optional[str] = Query(None, description="Filter: 'PENDING', 'PROCESSING', 'COMPLETED', 'CANCELLED'"),
+    exclude_cancelled: bool = Query(False),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -355,17 +422,13 @@ def get_service_history(
 
     orders = query.order_by(ServiceOrder.id.desc()).all()
 
-    # Attach formatted date string (e.g., "2026-09-29")
     for order in orders:
-        if order.created_at:
-            order.date = order.created_at.strftime("%Y-%m-%d")
-        else:
-            order.date = "N/A"
+        order.date = order.created_at.strftime("%Y-%m-%d") if order.created_at else "N/A"
 
     return orders
 
 # =====================================================================
-# 4. SSLCOMMERZ WEBHOOK & USER REDIRECTS
+# 4. SSLCOMMERZ WEBHOOKS (WITH PAYMENT NOTIFICATIONS)
 # =====================================================================
 
 @router.post("/payment/success")
@@ -379,6 +442,16 @@ async def payment_success(
         order.payment_status = "PAID"
         order.status = "PROCESSING"
         db.commit()
+
+        # Trigger Notification: Payment Succeeded
+        await trigger_notification(
+            db=db,
+            user_id=order.user_id,
+            title="Payment Confirmed",
+            body=f"Your payment of ৳{order.total_amount} for transaction {tran_id} was successfully verified.",
+            notification_type="PAYMENT"
+        )
+
         await ws_manager.broadcast({
             "event": "PAYMENT_UPDATE",
             "order_id": order.id,
@@ -393,6 +466,16 @@ async def payment_fail(tran_id: str = Form(...), db: Session = Depends(get_db)):
     if order:
         order.payment_status = "FAILED"
         db.commit()
+
+        # Trigger Notification: Payment Failed
+        await trigger_notification(
+            db=db,
+            user_id=order.user_id,
+            title="Payment Failed",
+            body=f"Payment for transaction {tran_id} was unsuccessful. Please try again.",
+            notification_type="PAYMENT"
+        )
+
         await ws_manager.broadcast({
             "event": "PAYMENT_UPDATE",
             "order_id": order.id,
@@ -406,6 +489,16 @@ async def payment_cancel(tran_id: str = Form(...), db: Session = Depends(get_db)
     if order:
         order.payment_status = "CANCELLED"
         db.commit()
+
+        # Trigger Notification: Payment Cancelled
+        await trigger_notification(
+            db=db,
+            user_id=order.user_id,
+            title="Payment Cancelled",
+            body=f"Payment session for transaction {tran_id} was cancelled.",
+            notification_type="PAYMENT"
+        )
+
         await ws_manager.broadcast({
             "event": "PAYMENT_UPDATE",
             "order_id": order.id,
@@ -433,41 +526,6 @@ def chat_with_gemini_assistant(data: AIChatRequest, db: Session = Depends(get_db
         for s in services
     ]
     return run_gemini_service_assistant(data.message, service_dicts)
-
-
-# ----------------- MARK ORDER AS COMPLETED -----------------
-
-@router.post("/order/{order_id}/complete", response_model=OrderResponse)
-async def complete_service_order(
-    order_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    order = db.query(ServiceOrder).filter(
-        ServiceOrder.id == order_id,
-        ServiceOrder.user_id == current_user.id
-    ).first()
-
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found.")
-
-    if order.status == "CANCELLED":
-        raise HTTPException(status_code=400, detail="Cannot complete a cancelled order.")
-
-    # 1. Update status to COMPLETED
-    order.status = "COMPLETED"
-    db.commit()
-    db.refresh(order)
-
-    # 2. Broadcast live status change to WebSocket
-    await ws_manager.broadcast({
-        "event": "ORDER_STATUS_CHANGED",
-        "order_id": order.id,
-        "status": "COMPLETED"
-    })
-
-    return order
-
 
 # =====================================================================
 # 6. LIVE WEBSOCKET
