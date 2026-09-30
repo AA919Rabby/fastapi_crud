@@ -24,7 +24,7 @@ payment_router = APIRouter()
 slots_router = APIRouter()
 
 # ==========================================
-# 1. PROFILE SECTION
+# 1. PROFILE SECTION (Supports both /profile and /profile/)
 # ==========================================
 
 def get_completed_orders_count(db: Session, user_id: int) -> int:
@@ -41,6 +41,7 @@ def get_user_profile(
 ):
     profile = db.query(UserProfile).filter(UserProfile.user_id == current_user.id).first()
 
+    # Combined First Name + Last Name from user registration
     registered_full_name = f"{current_user.first_name or ''} {current_user.last_name or ''}".strip()
     if not registered_full_name:
         registered_full_name = current_user.email.split("@")[0]
@@ -102,7 +103,7 @@ async def update_user_profile(
     db.commit()
     db.refresh(profile)
 
-    # 1. Trigger Notification in database
+    # Trigger Notification for Profile Update
     await trigger_notification(
         db=db,
         user_id=current_user.id,
@@ -114,7 +115,6 @@ async def update_user_profile(
     completed_count = get_completed_orders_count(db, current_user.id)
     user_created_at = current_user.created_at or datetime.now(timezone.utc)
 
-    # 2. Broadcast Live WebSocket Event
     await ws_manager.broadcast({
         "event": "PROFILE_UPDATED",
         "user_id": current_user.id,
