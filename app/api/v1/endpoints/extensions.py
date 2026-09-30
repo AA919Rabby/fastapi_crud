@@ -27,6 +27,12 @@ slots_router = APIRouter()
 # 1. PROFILE SECTION
 # ==========================================
 
+def get_completed_orders_count(db: Session, user_id: int) -> int:
+    return db.query(ServiceOrder).filter(
+        ServiceOrder.user_id == user_id,
+        ServiceOrder.status == "COMPLETED"
+    ).count()
+
 @profile_router.get("", response_model=ProfileResponse)
 def get_user_profile(
     db: Session = Depends(get_db),
@@ -42,7 +48,21 @@ def get_user_profile(
         db.add(profile)
         db.commit()
         db.refresh(profile)
-    return profile
+
+    completed_count = get_completed_orders_count(db, current_user.id)
+
+    return {
+        "id": profile.id,
+        "user_id": current_user.id,
+        "full_name": profile.full_name,
+        "email": current_user.email,
+        "phone_number": profile.phone_number,
+        "profile_picture_url": profile.profile_picture_url,
+        "address": profile.address,
+        "created_at": current_user.created_at,
+        "updated_at": profile.updated_at,
+        "total_completed_services": completed_count
+    }
 
 @profile_router.put("", response_model=ProfileResponse)
 async def update_user_profile(
@@ -68,7 +88,6 @@ async def update_user_profile(
     db.commit()
     db.refresh(profile)
 
-    # Trigger Notification for Profile Update
     await trigger_notification(
         db=db,
         user_id=current_user.id,
@@ -77,15 +96,28 @@ async def update_user_profile(
         notification_type="PROFILE"
     )
 
-    # Broadcast Live WebSocket Event
+    completed_count = get_completed_orders_count(db, current_user.id)
+
     await ws_manager.broadcast({
         "event": "PROFILE_UPDATED",
         "user_id": current_user.id,
         "full_name": profile.full_name,
-        "profile_picture_url": profile.profile_picture_url
+        "profile_picture_url": profile.profile_picture_url,
+        "total_completed_services": completed_count
     })
 
-    return profile
+    return {
+        "id": profile.id,
+        "user_id": current_user.id,
+        "full_name": profile.full_name,
+        "email": current_user.email,
+        "phone_number": profile.phone_number,
+        "profile_picture_url": profile.profile_picture_url,
+        "address": profile.address,
+        "created_at": current_user.created_at,
+        "updated_at": profile.updated_at,
+        "total_completed_services": completed_count
+    }
 
 # ==========================================
 # 2. NOTIFICATIONS SECTION

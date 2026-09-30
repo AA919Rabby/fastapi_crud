@@ -16,10 +16,13 @@ class ProfileResponse(BaseModel):
     id: int
     user_id: int
     full_name: Optional[str] = None
+    email: Optional[str] = None
     phone_number: Optional[str] = None
     profile_picture_url: Optional[str] = None
     address: Optional[str] = None
+    created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    total_completed_services: int = 0
 
     class Config:
         from_attributes = True
