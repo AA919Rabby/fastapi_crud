@@ -24,7 +24,7 @@ payment_router = APIRouter()
 slots_router = APIRouter()
 
 # ==========================================
-# 1. PROFILE SECTION (Supports both /profile and /profile/)
+# 1. PROFILE SECTION
 # ==========================================
 
 def get_completed_orders_count(db: Session, user_id: int) -> int:
@@ -85,56 +85,66 @@ async def update_user_profile(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    profile = db.query(UserProfile).filter(UserProfile.user_id == current_user.id).first()
-    if not profile:
-        profile = UserProfile(user_id=current_user.id)
-        db.add(profile)
+    try:
+        profile = db.query(UserProfile).filter(UserProfile.user_id == current_user.id).first()
+        if not profile:
+            profile = UserProfile(user_id=current_user.id)
+            db.add(profile)
 
-    if data.full_name is not None:
-        profile.full_name = data.full_name.strip()
-    if data.phone_number is not None:
-        profile.phone_number = data.phone_number.strip()
-    if data.profile_picture_url is not None:
-        profile.profile_picture_url = data.profile_picture_url.strip()
-    if data.address is not None:
-        profile.address = data.address.strip()
+        if data.full_name is not None and data.full_name.strip():
+            profile.full_name = data.full_name.strip()
+        if data.phone_number is not None and data.phone_number.strip():
+            profile.phone_number = data.phone_number.strip()
+        if data.profile_picture_url is not None:
+            profile.profile_picture_url = data.profile_picture_url.strip()
+        if data.address is not None and data.address.strip():
+            profile.address = data.address.strip()
 
-    profile.updated_at = datetime.now(timezone.utc)
-    db.commit()
-    db.refresh(profile)
+        profile.updated_at = datetime.now(timezone.utc)
 
-    # Trigger Notification for Profile Update
-    await trigger_notification(
-        db=db,
-        user_id=current_user.id,
-        title="Profile Updated",
-        body="Your personal profile details were updated successfully.",
-        notification_type="PROFILE"
-    )
+        # Commit profile update first
+        db.commit()
+        db.refresh(profile)
 
-    completed_count = get_completed_orders_count(db, current_user.id)
-    user_created_at = current_user.created_at or datetime.now(timezone.utc)
+        completed_count = get_completed_orders_count(db, current_user.id)
+        user_created_at = current_user.created_at or datetime.now(timezone.utc)
 
-    await ws_manager.broadcast({
-        "event": "PROFILE_UPDATED",
-        "user_id": current_user.id,
-        "full_name": profile.full_name,
-        "profile_picture_url": profile.profile_picture_url,
-        "total_completed_services": completed_count
-    })
+        # Trigger notification ONLY AFTER database commit succeeds!
+        await trigger_notification(
+            db=db,
+            user_id=current_user.id,
+            title="Profile Updated",
+            body="Your personal profile details were updated successfully.",
+            notification_type="PROFILE"
+        )
 
-    return {
-        "id": profile.id,
-        "user_id": current_user.id,
-        "full_name": profile.full_name,
-        "email": current_user.email,
-        "phone_number": profile.phone_number or "",
-        "profile_picture_url": profile.profile_picture_url or "",
-        "address": profile.address or "",
-        "created_at": user_created_at,
-        "updated_at": profile.updated_at,
-        "total_completed_services": completed_count
-    }
+        await ws_manager.broadcast({
+            "event": "PROFILE_UPDATED",
+            "user_id": current_user.id,
+            "full_name": profile.full_name,
+            "profile_picture_url": profile.profile_picture_url,
+            "total_completed_services": completed_count
+        })
+
+        return {
+            "id": profile.id,
+            "user_id": current_user.id,
+            "full_name": profile.full_name,
+            "email": current_user.email,
+            "phone_number": profile.phone_number or "",
+            "profile_picture_url": profile.profile_picture_url or "",
+            "address": profile.address or "",
+            "created_at": user_created_at,
+            "updated_at": profile.updated_at,
+            "total_completed_services": completed_count
+        }
+    except Exception as e:
+        db.rollback()
+        print(f">>> [PROFILE UPDATE ERROR]: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Could not update profile: {str(e)}"
+        )
 
 # ==========================================
 # 2. NOTIFICATIONS SECTION
