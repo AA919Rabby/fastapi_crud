@@ -39,27 +39,41 @@ def get_user_profile(
     current_user: User = Depends(get_current_user)
 ):
     profile = db.query(UserProfile).filter(UserProfile.user_id == current_user.id).first()
+
+    # Combined First Name + Last Name from user registration
+    registered_full_name = f"{current_user.first_name or ''} {current_user.last_name or ''}".strip()
+    if not registered_full_name:
+        registered_full_name = current_user.email.split("@")[0]
+
+    # If new user has no profile row yet, create it immediately with their registered data!
     if not profile:
         profile = UserProfile(
             user_id=current_user.id,
-            full_name=f"{current_user.first_name or ''} {current_user.last_name or ''}".strip(),
-            address=""
+            full_name=registered_full_name,
+            phone_number="",
+            profile_picture_url="",
+            address="Dhaka, Bangladesh"
         )
         db.add(profile)
         db.commit()
         db.refresh(profile)
+    elif not profile.full_name or profile.full_name.strip() == "":
+        profile.full_name = registered_full_name
+        db.commit()
+        db.refresh(profile)
 
     completed_count = get_completed_orders_count(db, current_user.id)
+    user_created_at = current_user.created_at or datetime.now(timezone.utc)
 
     return {
         "id": profile.id,
         "user_id": current_user.id,
         "full_name": profile.full_name,
         "email": current_user.email,
-        "phone_number": profile.phone_number,
-        "profile_picture_url": profile.profile_picture_url,
-        "address": profile.address,
-        "created_at": current_user.created_at,
+        "phone_number": profile.phone_number or "",
+        "profile_picture_url": profile.profile_picture_url or "",
+        "address": profile.address or "",
+        "created_at": user_created_at,
         "updated_at": profile.updated_at,
         "total_completed_services": completed_count
     }
@@ -97,6 +111,7 @@ async def update_user_profile(
     )
 
     completed_count = get_completed_orders_count(db, current_user.id)
+    user_created_at = current_user.created_at or datetime.now(timezone.utc)
 
     await ws_manager.broadcast({
         "event": "PROFILE_UPDATED",
@@ -111,10 +126,10 @@ async def update_user_profile(
         "user_id": current_user.id,
         "full_name": profile.full_name,
         "email": current_user.email,
-        "phone_number": profile.phone_number,
-        "profile_picture_url": profile.profile_picture_url,
-        "address": profile.address,
-        "created_at": current_user.created_at,
+        "phone_number": profile.phone_number or "",
+        "profile_picture_url": profile.profile_picture_url or "",
+        "address": profile.address or "",
+        "created_at": user_created_at,
         "updated_at": profile.updated_at,
         "total_completed_services": completed_count
     }
