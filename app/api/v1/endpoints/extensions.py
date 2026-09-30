@@ -41,8 +41,7 @@ def get_user_profile(
 ):
     profile = db.query(UserProfile).filter(UserProfile.user_id == current_user.id).first()
 
-    # Combined First Name + Last Name from user registration
-    registered_full_name = f"{current_user.first_name or ''} {current_user.last_name or ''}".strip()
+    registered_full_name = f"{getattr(current_user, 'first_name', '') or ''} {getattr(current_user, 'last_name', '') or ''}".strip()
     if not registered_full_name:
         registered_full_name = current_user.email.split("@")[0]
 
@@ -63,7 +62,8 @@ def get_user_profile(
         db.refresh(profile)
 
     completed_count = get_completed_orders_count(db, current_user.id)
-    user_created_at = current_user.created_at or datetime.now(timezone.utc)
+    # Safe getattr check so it NEVER throws "'User' object has no attribute 'created_at'"
+    user_created_at = getattr(current_user, 'created_at', None) or datetime.now(timezone.utc)
 
     return {
         "id": profile.id,
@@ -101,15 +101,14 @@ async def update_user_profile(
             profile.address = data.address.strip()
 
         profile.updated_at = datetime.now(timezone.utc)
-
-        # Commit profile update first
         db.commit()
         db.refresh(profile)
 
         completed_count = get_completed_orders_count(db, current_user.id)
-        user_created_at = current_user.created_at or datetime.now(timezone.utc)
+        # Safe getattr check
+        user_created_at = getattr(current_user, 'created_at', None) or datetime.now(timezone.utc)
 
-        # Trigger notification ONLY AFTER database commit succeeds!
+        # Trigger notification only after successful commit
         await trigger_notification(
             db=db,
             user_id=current_user.id,
