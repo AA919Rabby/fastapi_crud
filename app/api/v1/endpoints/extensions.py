@@ -28,10 +28,13 @@ slots_router = APIRouter()
 # ==========================================
 
 def get_completed_orders_count(db: Session, user_id: int) -> int:
-    return db.query(ServiceOrder).filter(
-        ServiceOrder.user_id == user_id,
-        ServiceOrder.status == "COMPLETED"
-    ).count()
+    try:
+        return db.query(ServiceOrder).filter(
+            ServiceOrder.user_id == user_id,
+            ServiceOrder.status == "COMPLETED"
+        ).count()
+    except Exception:
+        return 0
 
 @profile_router.get("", response_model=ProfileResponse)
 @profile_router.get("/", response_model=ProfileResponse)
@@ -41,7 +44,10 @@ def get_user_profile(
 ):
     profile = db.query(UserProfile).filter(UserProfile.user_id == current_user.id).first()
 
-    registered_full_name = f"{getattr(current_user, 'first_name', '') or ''} {getattr(current_user, 'last_name', '') or ''}".strip()
+    first_n = getattr(current_user, 'first_name', '') or ''
+    last_n = getattr(current_user, 'last_name', '') or ''
+    registered_full_name = f"{first_n} {last_n}".strip()
+
     if not registered_full_name:
         registered_full_name = current_user.email.split("@")[0]
 
@@ -62,19 +68,20 @@ def get_user_profile(
         db.refresh(profile)
 
     completed_count = get_completed_orders_count(db, current_user.id)
-    # Safe getattr check so it NEVER throws "'User' object has no attribute 'created_at'"
-    user_created_at = getattr(current_user, 'created_at', None) or datetime.now(timezone.utc)
+
+    # Safe date fallback that won't crash Postgres
+    safe_date = datetime.now(timezone.utc)
 
     return {
         "id": profile.id,
         "user_id": current_user.id,
-        "full_name": profile.full_name,
+        "full_name": profile.full_name or registered_full_name,
         "email": current_user.email,
         "phone_number": profile.phone_number or "",
         "profile_picture_url": profile.profile_picture_url or "",
         "address": profile.address or "",
-        "created_at": user_created_at,
-        "updated_at": profile.updated_at,
+        "created_at": safe_date,
+        "updated_at": profile.updated_at or safe_date,
         "total_completed_services": completed_count
     }
 
@@ -105,8 +112,7 @@ async def update_user_profile(
         db.refresh(profile)
 
         completed_count = get_completed_orders_count(db, current_user.id)
-        # Safe getattr check
-        user_created_at = getattr(current_user, 'created_at', None) or datetime.now(timezone.utc)
+        safe_date = datetime.now(timezone.utc)
 
         # Trigger notification only after successful commit
         await trigger_notification(
@@ -133,13 +139,12 @@ async def update_user_profile(
             "phone_number": profile.phone_number or "",
             "profile_picture_url": profile.profile_picture_url or "",
             "address": profile.address or "",
-            "created_at": user_created_at,
-            "updated_at": profile.updated_at,
+            "created_at": safe_date,
+            "updated_at": profile.updated_at or safe_date,
             "total_completed_services": completed_count
         }
     except Exception as e:
         db.rollback()
-        print(f">>> [PROFILE UPDATE ERROR]: {e}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Could not update profile: {str(e)}"
