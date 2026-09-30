@@ -34,18 +34,17 @@ def get_completed_orders_count(db: Session, user_id: int) -> int:
     ).count()
 
 @profile_router.get("", response_model=ProfileResponse)
+@profile_router.get("/", response_model=ProfileResponse)
 def get_user_profile(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     profile = db.query(UserProfile).filter(UserProfile.user_id == current_user.id).first()
 
-    # Combined First Name + Last Name from user registration
     registered_full_name = f"{current_user.first_name or ''} {current_user.last_name or ''}".strip()
     if not registered_full_name:
         registered_full_name = current_user.email.split("@")[0]
 
-    # If new user has no profile row yet, create it immediately with their registered data!
     if not profile:
         profile = UserProfile(
             user_id=current_user.id,
@@ -79,6 +78,7 @@ def get_user_profile(
     }
 
 @profile_router.put("", response_model=ProfileResponse)
+@profile_router.put("/", response_model=ProfileResponse)
 async def update_user_profile(
     data: ProfileUpdate,
     db: Session = Depends(get_db),
@@ -102,6 +102,7 @@ async def update_user_profile(
     db.commit()
     db.refresh(profile)
 
+    # 1. Trigger Notification in database
     await trigger_notification(
         db=db,
         user_id=current_user.id,
@@ -113,6 +114,7 @@ async def update_user_profile(
     completed_count = get_completed_orders_count(db, current_user.id)
     user_created_at = current_user.created_at or datetime.now(timezone.utc)
 
+    # 2. Broadcast Live WebSocket Event
     await ws_manager.broadcast({
         "event": "PROFILE_UPDATED",
         "user_id": current_user.id,
@@ -160,6 +162,7 @@ def save_fcm_token(
     return {"message": "FCM device token registered successfully."}
 
 @notifications_router.get("", response_model=List[NotificationResponse])
+@notifications_router.get("/", response_model=List[NotificationResponse])
 def get_notifications_list(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -281,6 +284,7 @@ async def payment_ipn(
 # ==========================================
 
 @slots_router.get("", response_model=List[SlotResponse])
+@slots_router.get("/", response_model=List[SlotResponse])
 def get_available_slots(
     service_id: int,
     slot_date: Optional[date] = None,
