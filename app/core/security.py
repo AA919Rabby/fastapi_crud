@@ -3,7 +3,12 @@ from datetime import timedelta, datetime, timezone
 import jwt
 from app.core.config import settings
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# 10 rounds executes in <100ms on cloud servers
+pwd_context = CryptContext(
+    schemes=["bcrypt"],
+    deprecated="auto",
+    bcrypt__default_rounds=10
+)
 
 def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
@@ -22,7 +27,6 @@ def create_access_token(subject: str | int, expires_delta: timedelta = None) -> 
     }
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
-# Generates temporary token after OTP is verified (valid for 15 minutes)
 def create_recover_password_token(email: str) -> str:
     expire = datetime.now(timezone.utc) + timedelta(minutes=15)
     to_encode = {
@@ -32,30 +36,10 @@ def create_recover_password_token(email: str) -> str:
     }
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
-# Decodes and validates the recovery token
 def verify_recover_password_token(token: str) -> str | None:
     try:
         decoded_token = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         if decoded_token.get("type") != "recovery_reset":
-            return None
-        return decoded_token.get("sub")
-    except jwt.PyJWTError:
-        return None
-
-# Kept legacy token methods so no other file breaks
-def create_password_reset_token(email: str) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(hours=settings.EMAIL_RESET_TOKEN_EXPIRE_HOURS)
-    to_encode = {
-        "exp": int(expire.timestamp()),
-        "sub": email,
-        "type": "reset"
-    }
-    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
-
-def verify_password_reset_token(token: str) -> str | None:
-    try:
-        decoded_token = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        if decoded_token.get("type") != "reset":
             return None
         return decoded_token.get("sub")
     except jwt.PyJWTError:

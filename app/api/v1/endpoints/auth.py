@@ -42,14 +42,13 @@ def register(user_in: UserCreate, db: Session = Depends(get_db)):
     user = create_user(db, user=user_in)
     return {"message": "User registered successfully", "user": user}
 
-# 2. UNIVERSAL LOGIN (WORKS FOR BOTH FLUTTER JSON & SWAGGER AUTHORIZE POPUP)
+# 2. FAST UNIVERSAL LOGIN
 @router.post("/login", response_model=Token)
 async def login(request: Request, db: Session = Depends(get_db)):
     content_type = request.headers.get("content-type", "")
     email = None
     password = None
 
-    # Handle Flutter JSON
     if "application/json" in content_type:
         try:
             body = await request.json()
@@ -57,7 +56,6 @@ async def login(request: Request, db: Session = Depends(get_db)):
             password = body.get("password")
         except Exception:
             pass
-    # Handle Swagger Form Data
     else:
         try:
             form = await request.form()
@@ -69,7 +67,7 @@ async def login(request: Request, db: Session = Depends(get_db)):
     if not email or not password:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Both email/username and password are required."
+            detail="Both email and password are required."
         )
 
     user = get_user_by_email(db, email=str(email).strip())
