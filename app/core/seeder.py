@@ -95,17 +95,20 @@ SEED_SERVICES = [
 
 
 def seed_default_services(db: Session):
-    service_count = db.query(Service).count()
+    print(">>> [SEEDER] Checking for missing services...")
 
-    if service_count == 0:
-        print(">>> [SEEDER] Inserting initial Bangladeshi services into database...")
+    added_count = 0
+    for item in SEED_SERVICES:
+        # Check if service with this title already exists
+        existing_service = db.query(Service).filter(Service.title == item["title"]).first()
 
-        for item in SEED_SERVICES:
+        # If it doesn't exist, insert it!
+        if not existing_service:
             db.add(Service(**item))
+            added_count += 1
 
+    if added_count > 0:
         db.commit()
-
-        print(">>> [SEEDER] Initial services successfully added!")
-
+        print(f">>> [SEEDER] Successfully added {added_count} new services to database!")
     else:
-        print(f">>> [SEEDER] Database already contains {service_count} services. Skipping seeding.")
+        print(">>> [SEEDER] All services are already present in the database.")
