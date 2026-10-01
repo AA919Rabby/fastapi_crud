@@ -202,9 +202,9 @@ def mark_notification_as_read(
     db.commit()
     return {"message": "Notification marked as read."}
 
-# ==========================================
+# =========================================
 # 3. PAYMENT SECTION
-# ==========================================
+# =========================================
 
 @payment_router.post("/initiate", response_model=PaymentInitiateResponse)
 async def initiate_payment(
